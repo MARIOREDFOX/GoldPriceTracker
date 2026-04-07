@@ -10,6 +10,8 @@ What it does:
   2. Detects whether pip is available
   3. If pip is missing → creates a virtualenv (.venv/) and uses that pip
   4. If pip exists     → installs directly (no venv needed)
+                       → but modern linux distributions can't handle the pip packages directly so make sure to use virtual_env!
+
   5. Installs all dependencies from requirements.txt
   6. Verifies all imports work
   7. Makes main.py executable
@@ -71,59 +73,35 @@ def has_pip(python_exe):
 
 
 def ensure_pip_available():
-    """
-    Returns the Python executable that has pip.
-    - If the current interpreter already has pip -> return sys.executable
-    - Otherwise create .venv/ and return the venv's python
-    """
-    step("Checking for pip...")
+    step("Setting up virtual environment...")
 
-    if has_pip(sys.executable):
-        ok("pip found — installing to system Python")
-        return sys.executable
-
-    # pip not found -> need a venv
-    warn("pip not found on this system (common on Solus / Arch / NixOS).")
-    info("Creating a virtual environment in .venv/ ...")
-
-    # Make sure venv module itself is available
     try:
-        import venv  # noqa: F401
+        import venv
     except ImportError:
         fail(
-            "Python 'venv' module is also missing.\n"
-            "   On Solus run:  sudo eopkg install python3\n"
-            "   Then re-run:   python3 install.py"
+            "Python 'venv' module is missing.\n\n"
+            "Debian/Ubuntu: sudo apt install python3-venv\n"
+            "Fedora:        sudo dnf install python3-venv\n"
+            "Arch:          sudo pacman -S python"
         )
 
-    # Create the venv (includes its own pip via ensurepip)
     if os.path.isdir(VENV_DIR):
-        info(f".venv/ already exists at {VENV_DIR} — reusing it")
+        info(f".venv already exists — reusing it")
     else:
         result = subprocess.run(
             [sys.executable, "-m", "venv", VENV_DIR],
             capture_output=True, text=True
         )
         if result.returncode != 0:
-            fail(
-                f"Failed to create virtual environment:\n{result.stderr.strip()}\n\n"
-                "   On Solus try:  sudo eopkg install python3-devel"
-            )
+            fail(f"Failed to create virtual environment:\n{result.stderr.strip()}")
+
         ok(f"Virtual environment created at {VENV_DIR}")
 
-    # Path to the venv's python
     venv_python = os.path.join(VENV_DIR, "bin", "python3")
     if not os.path.isfile(venv_python):
         venv_python = os.path.join(VENV_DIR, "bin", "python")
 
-    if not has_pip(venv_python):
-        fail(
-            "pip is still missing inside the venv — this is unexpected.\n"
-            "   Try bootstrapping manually:\n"
-            "   curl https://bootstrap.pypa.io/get-pip.py | python3"
-        )
-
-    ok("pip is available inside the virtual environment")
+    ok("Using virtual environment Python")
     return venv_python
 
 
@@ -163,12 +141,12 @@ def install_requirements(python_exe):
 def verify_imports(python_exe):
     step("Verifying imports...")
     checks = {
-        "requests":           "requests",
-        "beautifulsoup4":     "bs4",
-        "matplotlib":         "matplotlib",
-        "tkinter (built-in)": "tkinter",
+        "requests":           ("requests","pip"),
+        "beautifulsoup4":     ("bs4", "pip"),
+        "matplotlib":         ("matplotlib" , "pip"),
+        "tkinter (built-in)": ("tkinter", "system")
     }
-    for display, mod in checks.items():
+    for display, (mod , install_type) in checks.items():
         result = subprocess.run(
             [python_exe, "-c", f"import {mod}"],
             capture_output=True
@@ -176,10 +154,18 @@ def verify_imports(python_exe):
         if result.returncode == 0:
             ok(display)
         else:
-            fail(
-                f"{display} could not be imported.\n"
-                f"   Try manually: {python_exe} -m pip install {display}"
-            )
+            if install_type == "pip":
+                fail(
+                    f"{display} could not be imported.\n"
+                    f"   Try manually: {python_exe} -m pip install {display}"
+                )
+            
+            else:
+                fail(
+                    f"{display} could not be imported.\n"
+                    f"   Install it using your system package manager:\n"
+                    f"   sudo apt install python3-tk"
+                )
 
 
 # ── 5. Make main.py executable ────────────────────────────────────────────────
@@ -201,6 +187,7 @@ def create_desktop_launcher(python_exe):
     main_py     = os.path.join(PROJECT_DIR, "main.py")
     desktop_dir = os.path.expanduser("~/Desktop")
     apps_dir    = os.path.expanduser("~/.local/share/applications")
+    icon_path = os.path.join(PROJECT_DIR , "icon.png")
 
     # Always point the launcher at whichever python has the deps installed
     desktop_content = f"""[Desktop Entry]
@@ -210,7 +197,7 @@ Name=Gold Price Tracker
 GenericName=Gold Price Tracker
 Comment=Live gold prices for Chennai — Times of India
 Exec={python_exe} {main_py}
-Icon=utilities-finance
+Icon = {icon_path}
 Terminal=false
 Categories=Finance;Utility;
 StartupNotify=true
